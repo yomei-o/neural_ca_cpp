@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neural Cellular Automata — 育って自己修復する絵（C++/WASM）</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 620px;
+         margin: 24px auto; padding: 0 16px; line-height: 1.6; }
+  h1 { font-size: 1.3rem; margin-bottom: .1em; }
+  .sub { color:#888; margin-top:0; font-size:.95rem; }
+  #cv { image-rendering: pixelated; width: 100%; max-width: 480px; aspect-ratio:1/1;
+        background:#fff; border-radius:10px; display:block; margin:14px auto; cursor:crosshair;
+        box-shadow:0 2px 10px #0002; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:center; margin:12px 0; }
+  button { font-size:1rem; padding:8px 14px; border-radius:8px; border:1px solid #888; background:#f3f3f3; cursor:pointer; }
+  @media (prefers-color-scheme: dark){ button{ background:#2a2a2a; color:#eee; } }
+  button:disabled{ opacity:.45; cursor:default; }
+  label { font-size:.9rem; color:#888; }
+  #status { text-align:center; font-weight:600; min-height:1.4em; }
+  .note { color:#888; font-size:.85rem; margin-top:14px; }
+  a { color:#2a8; }
+</style>
+</head>
+<body>
+  <h1>🧬 Neural Cellular Automata</h1>
+  <p class="sub">1個の種セルから、<b>学習した「近傍ルール（小さなニューラルネット）」だけ</b>で絵が“成長”します。
+  絵をクリック（ドラッグ）して<b>壊す</b>と、勝手に<b>再生（自己修復）</b>します。全部 C++（自作autograd で学習）→ WASM。</p>
+
+  <canvas id="cv" width="32" height="32"></canvas>
+  <p id="status">読み込み中…</p>
+
+  <div class="row">
+    <button id="grow">🌱 種から育てる</button>
+    <button id="playpause">⏸ 一時停止</button>
+    <label>速度 <input type="range" id="speed" min="1" max="8" value="2"></label>
+  </div>
+  <p class="note">
+    仕組み：各セルは16次元の状態（先頭4=RGBA）を持ち、近傍を見て学習済みネットで自分を更新→全セル並列で繰り返すと、
+    局所ルールだけから全体の形が<b>創発</b>します。プール＋ダメージ学習で「形の保持」と「自己修復」を獲得。<br>
+    クリックで破壊 → 数十ステップで再生。ソース: <a href="https://github.com/yomei-o">github.com/yomei-o</a>
+  </p>
+
+<script src="ca.js"></script>
+<script>
+(function(){
+  const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+  const status=document.getElementById('status');
+  const btnGrow=document.getElementById('grow'), btnPP=document.getElementById('playpause'), speed=document.getElementById('speed');
+  let M=null, api={}, N=32, img=null, playing=true, raf=0, off=null, offctx=null;
+
+  createCA().then(mod=>{
+    M=mod;
+    api.init=M.cwrap('ca_init','number',[]);
+    api.n=M.cwrap('ca_n','number',[]);
+    api.reset=M.cwrap('ca_reset',null,[]);
+    api.step=M.cwrap('ca_step',null,[]);
+    api.damage=M.cwrap('ca_damage',null,['number','number','number']);
+    api.rgba=M.cwrap('ca_rgba','number',[]);
+    N=api.init();
+    if(!N){ status.textContent='nca.bin の読み込みに失敗しました。'; return; }
+    cv.width=N; cv.height=N;
+    off=document.createElement('canvas'); off.width=N; off.height=N; offctx=off.getContext('2d');
+    img=offctx.createImageData(N,N);
+    api.reset();
+    status.textContent='育っています… 絵をクリックで壊せます。';
+    loop();
+  });
+
+  function draw(){
+    const p=api.rgba();
+    img.data.set(M.HEAPU8.subarray(p, p+N*N*4));
+    offctx.putImageData(img,0,0);
+    ctx.imageSmoothingEnabled=false;
+    ctx.clearRect(0,0,cv.width,cv.height);
+    ctx.drawImage(off,0,0);
+  }
+  let acc=0;
+  function loop(){
+    if(playing){ const spd=parseInt(speed.value,10); for(let k=0;k<spd;k++) api.step(); }
+    draw();
+    raf=requestAnimationFrame(loop);
+  }
+
+  function damageAt(ev){
+    const r=cv.getBoundingClientRect();
+    const x=Math.floor((ev.clientX-r.left)/r.width*N);
+    const y=Math.floor((ev.clientY-r.top)/r.height*N);
+    api.damage(x,y,Math.max(2,Math.floor(N*0.14)));
+  }
+  let down=false;
+  cv.addEventListener('pointerdown',e=>{ down=true; damageAt(e); });
+  cv.addEventListener('pointermove',e=>{ if(down) damageAt(e); });
+  window.addEventListener('pointerup',()=>{ down=false; });
+
+  btnGrow.addEventListener('click',()=>{ api.reset(); });
+  btnPP.addEventListener('click',()=>{ playing=!playing; btnPP.textContent=playing?'⏸ 一時停止':'▶ 再生'; });
+})();
+</script>
+</body>
+</html>
